@@ -28,6 +28,7 @@ The system classifies waste into these categories:
 
 
 ## Setup Instructions
+### Python version 3.12.4
 ### Activate Virtual Environment
 ```bash
 # Windows PowerShell

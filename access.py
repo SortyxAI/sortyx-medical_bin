@@ -11,20 +11,79 @@ from datetime import datetime
 import os
 import csv
 import asyncio
+import google.generativeai as genai
+from PIL import Image
+import io
 
 
-CONFIDENCE_THRESHOLD = 0.70  
-LOW_CONFIDENCE_THRESHOLD = 0.30
-MOTION_THRESHOLD = 2000  
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'Enter api key here')
+CONFIDENCE_THRESHOLD = 0.80  # 80% threshold for YOLO, below this uses Gemini
+MOTION_THRESHOLD = 2000  # Motion threshold to avoid false detections from camera noise
 MODEL_PATH = "models/ClassifyBest.pt"
 
 app = FastAPI()
+
+# Gemini API
+try:
+    if GEMINI_API_KEY and GEMINI_API_KEY != 'Enter api key here':
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+        print("Gemini model initialized successfully")
+    else:
+        gemini_model = None
+        print("Warning: No valid Gemini API key provided. Gemini fallback disabled.")
+except Exception as e:
+    print(f"Warning: Could not initialize Gemini model: {e}")
+    gemini_model = None
 
 model = YOLO("models/ClassifyBest.pt")
 
 CLASS_NAMES = list(model.names.values()) 
 waste_counts = {name: 0 for name in CLASS_NAMES}
 
+def classify_with_gemini(frame):
+  
+    if gemini_model is None:
+        return "GEMINI_FEED_NOT_PRESENT", 0.0
+    
+    try:
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(frame_rgb)
+        
+
+        prompt = f"""
+        Analyze this image and classify the waste item into one of these categories: {', '.join(CLASS_NAMES)}.
+        
+        Look for:
+        - General waste: regular trash, food waste, paper, plastic containers
+        - Sharp: needles, broken glass, scalpels, metal fragments  
+        - Chemical waste: containers with chemical labels, hazardous symbols
+        - Biohazard: medical waste, blood products, contaminated materials
+        
+        Respond with only the category name from the list: {CLASS_NAMES}
+        If you cannot clearly identify waste in the image, respond with "UNCLEAR".
+        """
+        
+    
+        response = gemini_model.generate_content([prompt, pil_image])
+        
+        
+        if response and response.text:
+            predicted_class = response.text.strip().upper()
+            
+            
+            for class_name in CLASS_NAMES:
+                if class_name.upper() in predicted_class:
+                    return class_name, 0.75  # Assign 75% confidence for Gemini predictions
+            
+           
+            return "GEMINI_UNCLEAR", 0.0
+        else:
+            return "GEMINI_NO_RESPONSE", 0.0
+            
+    except Exception as e:
+        print(f"Gemini classification error: {e}")
+        return "GEMINI_ERROR", 0.0
 
 app.mount("/templates", StaticFiles(directory="templates"), name="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static") 
@@ -41,7 +100,7 @@ async def classify_websocket(websocket: WebSocket):
     prev_gray = None
     
    
-    timing_state = None  # "analyzing", "show_result", "waiting"
+    timing_state = None  # None, "analyzing", "showing_result", "waiting"
     timing_start = None
     last_classification = None
     last_confidence = 0.0
@@ -64,17 +123,17 @@ async def classify_websocket(websocket: WebSocket):
                 print("Decode error:", e)
                 continue
 
-            processed_frame = cv2.resize(frame, (640, 640))     
+            processed_frame = cv2.resize(frame, (640, 640))   # *NEW*    
             
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # Handle time
+            
             current_time = datetime.now()
             if timing_state is not None and timing_start is not None:
                 elapsed = (current_time - timing_start).total_seconds()
                 
                 if timing_state == "analyzing" and elapsed < 3.0:
-                    # 3-second analyzing phase
+                    
                     countdown = int(3 - elapsed)
                     await websocket.send_text(json.dumps({
                         "label": "ANALYZING_COUNTDOWN",
@@ -83,10 +142,10 @@ async def classify_websocket(websocket: WebSocket):
                         "model_used": "NONE",
                         "countdown": countdown + 1
                     }))
-                    continue  # Skip motion during analysis
+                    continue  # Skip motion detection during analysis
                     
                 elif timing_state == "analyzing" and elapsed >= 3.0:
-                    # Classification result
+                    
                     waste_counts[last_classification] += 1
                     print(f"Updated waste counts: {waste_counts}")
                     await websocket.send_text(json.dumps({
@@ -100,7 +159,7 @@ async def classify_websocket(websocket: WebSocket):
                     continue
                     
                 elif timing_state == "waiting" and elapsed < 3.0:
-                    # 3-second wait
+                    
                     countdown = int(3 - elapsed)
                     await websocket.send_text(json.dumps({
                         "label": "WAIT_COUNTDOWN",
@@ -110,10 +169,10 @@ async def classify_websocket(websocket: WebSocket):
                         "countdown": countdown + 1,
                         "last_classification": last_classification
                     }))
-                    continue  # Skip motion during wait
+                    continue 
                     
                 elif timing_state == "waiting" and elapsed >= 3.0:
-                    # normal detection
+                   
                     timing_state = None
                     timing_start = None
                     last_classification = None
@@ -132,7 +191,7 @@ async def classify_websocket(websocket: WebSocket):
                 label = "NO_MOTION" 
                 confidence = 0.0
                 
-                # Debug motion
+                
                 if motion_level > MOTION_THRESHOLD:
                     print(f"MOTION DETECTED: {motion_level:.0f} (threshold: {MOTION_THRESHOLD}) - Running YOLO")
                 else:
@@ -149,39 +208,60 @@ async def classify_websocket(websocket: WebSocket):
                             cls_id = int(probs.top1)
                             confidence = float(probs.top1conf.item())
                             
-                          
+                            print(f"YOLO result: class_id={cls_id}, confidence={confidence:.2f}, threshold={CONFIDENCE_THRESHOLD}")
+                            
+                            # Initialize variables
                             label = None
                             model_used = "NONE"
                             valid_classification = False
                             
-                            # YOLO confidence level
+                            # Check YOLO confidence levels
                             if confidence >= CONFIDENCE_THRESHOLD and 0 <= cls_id < len(CLASS_NAMES):
-                                # High confidence classification (gt 70%) - use timing sequence
+                                # High confidence classification (≥80%) - use YOLO with timing sequence
                                 label = CLASS_NAMES[cls_id]
                                 model_used = "YOLO"
                                 valid_classification = True
                                 print(f"High confidence YOLO classification: {label} with confidence {confidence:.2f}")
                                 
-                            elif confidence >= LOW_CONFIDENCE_THRESHOLD and 0 <= cls_id < len(CLASS_NAMES):
-                                # Low confidence classification (30-70%)
-                                label = f"{CLASS_NAMES[cls_id]}_LOW_CONF"
-                                model_used = "YOLO_LOW"
-                                valid_classification = False
-                                print(f"Low confidence YOLO classification: {CLASS_NAMES[cls_id]} with confidence {confidence:.2f}")
+                            elif 0 <= cls_id < len(CLASS_NAMES):
+                                # YOLO confidence below 80% - use Gemini API fallback
+                                print(f"YOLO confidence {confidence:.2f} below 80% threshold, using Gemini...")
+                                gemini_label, gemini_confidence = classify_with_gemini(frame)
+                                
+                                if gemini_label in CLASS_NAMES:
+                                    # Gemini successfully classified
+                                    label = gemini_label
+                                    confidence = gemini_confidence
+                                    model_used = "GEMINI"
+                                    valid_classification = True
+                                    print(f"Gemini classification: {label} with confidence {confidence:.2f}")
+                                    
+                                elif gemini_label == "GEMINI_FEED_NOT_PRESENT":
+                                    
+                                    label = "GEMINI_FEED_NOT_PRESENT"
+                                    model_used = "GEMINI_NO_KEY"
+                                    valid_classification = False  # Don't use timing sequence
+                                    print("Gemini feed not present - no valid API key")
+                                    
+                                else:
+                                    
+                                    label = "NO_MOTION"
+                                    confidence = 0.0
+                                    valid_classification = False
+                                    print(f"Gemini failed to classify, showing NO_MOTION")
                                 
                             else:
-                                # Very low confidence (<30%)
-                                # Set to NO_MOTION to show intro image (default behavior)
+                               
                                 label = "NO_MOTION"
                                 confidence = 0.0
                                 valid_classification = False
-                                print(f"YOLO confidence {confidence:.2f} below 30% threshold. No classification shown.")
+                                print(f"Invalid class ID from YOLO. No classification shown.")
                             
-                           
+                            
                             if valid_classification and label in CLASS_NAMES and timing_state is None:
                                 print(f"Valid object identified: {label} with confidence {confidence:.2f}. Starting timing sequence...")
                                 
-
+                                # Start non-blocking timing sequence
                                 timing_state = "analyzing"
                                 timing_start = datetime.now()
                                 last_classification = label
@@ -196,12 +276,12 @@ async def classify_websocket(websocket: WebSocket):
                                     "model_used": "NONE"
                                 }))
                                 
-
+                               
                                 continue
                             else:
                                 
                                 if timing_state is None:
-                                    print(f"Motion detected but no timing sequence. Label: {label}, Valid: {valid_classification}")
+                                    print(f"Motion detected but no timing sequence. Label: {label}, Valid: {valid_classification}, Model: {model_used}")
                                 else:
                                     print(f"Timing sequence in progress, ignoring new motion detection")
                             
@@ -220,13 +300,12 @@ async def classify_websocket(websocket: WebSocket):
                 
                 print(f"Final label after motion processing: '{label}', confidence: {confidence:.2f}")
 
-        
-            
+    
             if timing_state is None:
-                if label in ["NO_MOTION", "INIT", "ERROR", "NO_PROBS_DETECTED"] or label not in CLASS_NAMES:
-                    
-                    if label.endswith("_LOW_CONF"):
-                        model_used = "YOLO_LOW"
+                if label in ["NO_MOTION", "INIT", "ERROR", "NO_PROBS_DETECTED", "GEMINI_FEED_NOT_PRESENT"] or label not in CLASS_NAMES:
+                    # Handle cases that don't need timing sequence
+                    if label == "GEMINI_FEED_NOT_PRESENT":
+                        model_used = "GEMINI_NO_KEY"
                     else:
                         model_used = "NONE"
                     

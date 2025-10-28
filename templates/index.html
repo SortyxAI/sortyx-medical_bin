@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sortyx Three Category Bin 2.0</title>
+    <title>Sortyx Medical Waste Classifier</title>
 
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700;800&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
@@ -57,7 +57,7 @@
             text-align: left;
         }
 
-        .video-container { 
+        .video-container {
             position: relative;
             width: 100%;
             height: 400px; 
@@ -93,6 +93,7 @@
             margin-top: 10px;
             color: #e74c3c;
         }
+        
         
         .camera-video { 
             width: 100%;
@@ -199,7 +200,7 @@
 </head>
 <body>
     <header>
-        <h1>Sortyx Three category bin 2.0</h1>
+        <h1>Sortyx Medical Waste Classifier</h1>
     </header>
 
     <main class="container">
@@ -352,9 +353,11 @@
                         }
 
 
-                        // Logic for video display
+                        // Logic for displaying the video
                         if (label in STATUS_MESSAGES) {
+                            // System Status (NO_MOTION, INIT, etc.)
                             
+                            // Handle countdown messages specially
                             if (label === "ANALYZING_COUNTDOWN") {
                                 video.style.display = "block";
                                 introImage.style.display = "none";
@@ -371,7 +374,7 @@
                                 systemStatusEl.textContent = status.text + `${data.countdown}s`;
                                 systemStatusEl.style.color = status.color;
                                 
-                                // Keep showing the model indicator and last result during countdown
+                                
                                 modelIndicatorEl.textContent = "⚡ Powered by YOLO Model";
                                 modelIndicatorEl.style.color = "#2ecc71";
                                 
@@ -387,10 +390,10 @@
                                 systemStatusEl.textContent = status.text;
                                 systemStatusEl.style.color = status.color;
                                 
-                                // Clear model indicator when no classification is happening
+                                
                                 modelIndicatorEl.textContent = "";
 
-                                // Clear classification result display
+                                
                                 resultEl.textContent = STATUS_MESSAGES["NO_MOTION"].text;
                                 confidenceEl.textContent = "";
                             }
@@ -400,27 +403,53 @@
                             video.style.display = "block";
                             introImage.style.display = "none";
                             
-                            // Handle low confidence classifications
-                            if (label.endsWith("_LOW_CONF")) {
+                           
+                            if (label === "GEMINI_FEED_NOT_PRESENT") {
+                                systemStatusEl.textContent = "Gemini API - No valid API key";
+                                systemStatusEl.style.color = "#e67e22"; // Orange for missing API
+                                modelIndicatorEl.textContent = "⚠️ Gemini Feed Not Available";
+                                modelIndicatorEl.style.color = "#e67e22";
+                                resultEl.textContent = "Classification: gemini feed not present";
+                                confidenceEl.textContent = "";
+                            }
+                           
+                            else if (label.endsWith("_LOW_CONF")) {
                                 const actualLabel = label.replace("_LOW_CONF", "");
                                 systemStatusEl.textContent = "YOLO Model - Low Confidence Level";
-                                systemStatusEl.style.color = "#f1c40f"; // Yellow for low conf
+                                systemStatusEl.style.color = "#f1c40f"; // Yellow for low confidence
                                 modelIndicatorEl.textContent = "⚠️ Low Confidence Detection";
                                 modelIndicatorEl.style.color = "#f1c40f";
                                 resultEl.textContent = `Classification: ${actualLabel} (Low Conf.)`;
+                                if (data.confidence !== undefined && data.confidence > 0) {
+                                    confidenceEl.textContent = `${(data.confidence * 100).toFixed(2)}%`;
+                                } else {
+                                    confidenceEl.textContent = "";
+                                }
                             } else {
-                                // High confidence classification
-                                systemStatusEl.textContent = "YOLO Model - Object Classified";
-                                systemStatusEl.style.color = "#2ecc71"; // Green for YOLO
-                                modelIndicatorEl.textContent = "⚡ Powered by YOLO Model";
-                                modelIndicatorEl.style.color = "#2ecc71";
+                                // Regular classification - check which model was used
+                                if (data.model_used === "YOLO") {
+                                    systemStatusEl.textContent = "YOLO Model - Object Classified";
+                                    systemStatusEl.style.color = "#2ecc71"; // Green for YOLO
+                                    modelIndicatorEl.textContent = "⚡ Powered by YOLO";
+                                    modelIndicatorEl.style.color = "#2ecc71";
+                                } else if (data.model_used === "GEMINI") {
+                                    systemStatusEl.textContent = "Gemini AI - Object Classified";
+                                    systemStatusEl.style.color = "#9b59b6"; // Purple for Gemini
+                                    modelIndicatorEl.textContent = "🤖 Powered by Gemini";
+                                    modelIndicatorEl.style.color = "#9b59b6";
+                                } else {
+                                    systemStatusEl.textContent = "Object Classified";
+                                    systemStatusEl.style.color = "#2ecc71";
+                                    modelIndicatorEl.textContent = "🔍 AI Classification";
+                                    modelIndicatorEl.style.color = "#2ecc71";
+                                }
                                 resultEl.textContent = `Classification: ${label}`;
-                            }
-                            
-                            if (data.confidence !== undefined && data.confidence > 0) {
-                                confidenceEl.textContent = `${(data.confidence * 100).toFixed(2)}%`;
-                            } else {
-                                confidenceEl.textContent = "";
+                                
+                                if (data.confidence !== undefined && data.confidence > 0) {
+                                    confidenceEl.textContent = `${(data.confidence * 100).toFixed(2)}%`;
+                                } else {
+                                    confidenceEl.textContent = "";
+                                }
                             }
                         }
 

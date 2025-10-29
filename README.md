@@ -1,4 +1,4 @@
-# Sortyx Three Category Bin 2.0
+# Sortyx Medical Waste Classifier
 Real-time waste classification system using YOLO AI model.
 
 

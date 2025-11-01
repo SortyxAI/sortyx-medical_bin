@@ -1,0 +1,16 @@
+# Frontend Client Requirements (frontend.py)
+# Compatible with Python 3.12.7
+
+# Core web framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+
+# Computer Vision (for motion detection and image processing)
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
+
+# HTTP client (for backend communication)
+httpx==0.27.2
+
+# WebSocket support (included in uvicorn[standard])
+websockets==13.1
